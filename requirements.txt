@@ -15,13 +15,12 @@
 torch>=2.0.0          # PyTorch for model training and inference
 numpy>=1.24.0         # Numerical operations
 
-# Data Processing & Database
+# Data Processing & Storage
 pandas>=2.0.0         # Data manipulation and analysis
-sqlalchemy>=2.0.0     # Database ORM (PostgreSQL)
-asyncpg>=0.28.0       # Async PostgreSQL driver
+pyarrow>=14.0.0       # Parquet file read/write engine
 
-# Async HTTP & Network
-aiohttp>=3.9.0        # Async HTTP client (for Birdeye/Jupiter APIs)
+# Crypto Exchange Data
+ccxt>=4.0.0           # Unified crypto exchange API (Binance OHLCV + funding rates)
 
 # Environment & Configuration
 python-dotenv>=1.0.0  # Load .env files
@@ -29,19 +28,6 @@ python-dotenv>=1.0.0  # Load .env files
 # Logging & Progress
 loguru>=0.7.0         # Structured logging
 tqdm>=4.66.0          # Progress bars
-
-# Solana Blockchain Integration
-# Note: Install solders first, then solana (as recommended by solana-py)
-solders>=0.18.0       # Solana Rust bindings (install first)
-solana>=0.30.0        # Solana Python SDK
-base58>=2.1.0         # Base58 encoding for Solana addresses
-
-# Dashboard & Visualization
-streamlit>=1.28.0     # Web dashboard framework
-plotly>=5.17.0        # Interactive charts
-
-# PostgreSQL
-psycopg2-binary>=2.9.10
 
 # ===== Optional Dependencies (For experimental scripts) =====
 # See requirements-optional.txt for:

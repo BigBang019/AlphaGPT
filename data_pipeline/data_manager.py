@@ -1,70 +1,66 @@
-import asyncio
-import aiohttp
+import pandas as pd
+from pathlib import Path
 from loguru import logger
 from .config import Config
-from .db_manager import DBManager
-from .providers.birdeye import BirdeyeProvider
-from .providers.dexscreener import DexScreenerProvider
+from .providers.ccxt_provider import CCXTProvider
+
 
 class DataManager:
+    """
+    Data manager that downloads BTC/USDT perp data via ccxt
+    and stores it as a Parquet file. Fully synchronous — no database needed.
+    """
+
     def __init__(self):
-        self.db = DBManager()
-        self.birdeye = BirdeyeProvider()
-        self.dexscreener = DexScreenerProvider()
-        
-    async def initialize(self):
-        await self.db.connect()
-        await self.db.init_schema()
+        self.provider = CCXTProvider()
 
-    async def close(self):
-        await self.db.close()
-
-    async def pipeline_sync_daily(self):
-        logger.info("Step 1: Discovering trending tokens...")
-        limit = 500 if Config.BIRDEYE_IS_PAID else 100
-        candidates = await self.birdeye.get_trending_tokens(limit=limit)
-        
-        logger.info(f"Raw candidates found: {len(candidates)}")
-
-        selected_tokens = []
-        for t in candidates:
-            liq = t.get('liquidity', 0)
-            fdv = t.get('fdv', 0)
-            
-            if liq < Config.MIN_LIQUIDITY_USD: continue
-            if fdv < Config.MIN_FDV: continue
-            if fdv > Config.MAX_FDV: continue # 剔除像 WIF/BONK 这种巨无霸，专注于早期高成长
-            
-            selected_tokens.append(t)
-            
-        logger.info(f"Tokens selected after filtering: {len(selected_tokens)}")
-        
-        if not selected_tokens:
-            logger.warning("No tokens passed the filter. Relax constraints in Config.")
+    def pipeline_sync(self):
+        """
+        Main pipeline: download BTC/USDT perp OHLCV + funding rates from Binance,
+        merge them, and save to Parquet file.
+        """
+        # --- Step 1: Fetch OHLCV ---
+        logger.info("Step 1: Fetching OHLCV data via ccxt...")
+        ohlcv_df = self.provider.fetch_all_ohlcv()
+        if ohlcv_df.empty:
+            logger.error("No OHLCV data. Aborting.")
             return
 
-        db_tokens = [(t['address'], t['symbol'], t['name'], t['decimals'], Config.CHAIN) for t in selected_tokens]
-        await self.db.upsert_tokens(db_tokens)
+        # --- Step 2: Fetch Funding Rates ---
+        logger.info("Step 2: Fetching funding rate data via ccxt...")
+        funding_df = self.provider.fetch_all_funding_rates()
 
-        logger.info(f"Step 4: Fetching OHLCV for {len(selected_tokens)} tokens...")
-        
-        async with aiohttp.ClientSession(headers=self.birdeye.headers) as session:
-            tasks = []
-            for t in selected_tokens:
-                tasks.append(self.birdeye.get_token_history(session, t['address']))
-            
-            batch_size = 20
-            total_candles = 0
-            
-            for i in range(0, len(tasks), batch_size):
-                batch = tasks[i:i+batch_size]
-                results = await asyncio.gather(*batch)
-                
-                records = [item for sublist in results if sublist for item in sublist]
-                
-                # 批量写入
-                await self.db.batch_insert_ohlcv(records)
-                total_candles += len(records)
-                logger.info(f"Processed batch {i}/{len(tasks)}. Inserted {len(records)} candles.")
-                
-        logger.success(f"Pipeline complete. Total candles stored: {total_candles}")
+        # --- Step 3: Merge funding rates into OHLCV ---
+        logger.info("Step 3: Merging funding rates into OHLCV...")
+        if not funding_df.empty:
+            # Funding rates come every 8h; forward-fill to align with 1h OHLCV
+            funding_df = funding_df.set_index("timestamp").sort_index()
+            ohlcv_df = ohlcv_df.set_index("timestamp").sort_index()
+
+            # Reindex funding to OHLCV timestamps with forward fill
+            ohlcv_df["funding_rate"] = (
+                funding_df["funding_rate"]
+                .reindex(ohlcv_df.index, method="ffill")
+                .fillna(0.0)
+                .values
+            )
+            ohlcv_df = ohlcv_df.reset_index()
+        else:
+            ohlcv_df["funding_rate"] = 0.0
+
+        # Add symbol column
+        ohlcv_df["symbol"] = Config.SYMBOL
+
+        # --- Step 4: Save to Parquet ---
+        data_dir = Path(Config.DATA_DIR)
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        output_path = Config.DATA_FILE
+        ohlcv_df.to_parquet(output_path, index=False, engine="pyarrow")
+
+        logger.success(
+            f"Pipeline complete. Saved {len(ohlcv_df)} records to {output_path}\n"
+            f"  Range: {ohlcv_df['timestamp'].iloc[0]} to {ohlcv_df['timestamp'].iloc[-1]}\n"
+            f"  Columns: {list(ohlcv_df.columns)}\n"
+            f"  File size: {output_path.stat().st_size / 1024 / 1024:.1f} MB"
+        )

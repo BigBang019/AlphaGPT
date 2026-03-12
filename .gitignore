@@ -53,6 +53,16 @@ htmlcov/
 # Jupyter Notebook
 .ipynb_checkpoints
 
+# Data files
+data/
+*.parquet
+
+# Model outputs
+best_btc_strategy.json
+best_meme_strategy.json
+best_model.pt
+training_history.json
+
 # OS
 .DS_Store
 Thumbs.db
